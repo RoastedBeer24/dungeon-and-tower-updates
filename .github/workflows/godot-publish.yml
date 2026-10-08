@@ -1,0 +1,87 @@
+# Publishes a Godot build of Dungeon & Tower to the "godot-channel" prerelease.
+#
+# A build arrives as a branch named godot-staging/<version> holding staging/payload.json (unsigned manifest
+# payload from tools/godot/package-update.mjs --unsigned) and the update pack split into staging/*.part* files.
+# This job joins and checks the pack, signs the payload with the release key from the DNT_SIGNING_KEY secret,
+# uploads the pack and then godot-latest.json, and deletes the staging branch.
+#
+# The key only exists as a repository secret: it is written to a temporary file readable by the runner user,
+# used once by tools/sign-update.mjs (which refuses keys that do not match the key built into the game) and removed.
+# The release is a prerelease and never marked latest, so the desktop web build's releases/latest is untouched.
+name: Publish Godot update
+
+on:
+  push:
+    branches: ['godot-staging/**']
+
+permissions:
+  contents: write
+
+concurrency:
+  group: godot-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Join and check the pack
+        run: |
+          set -euo pipefail
+          cd staging
+          node -e '
+            const fs=require("fs"),crypto=require("crypto");
+            const p=JSON.parse(fs.readFileSync("payload.json","utf8"));
+            if(p.channel!=="godot")throw new Error("not a godot payload");
+            for(const k of p.packs){
+              const parts=fs.readdirSync(".").filter(f=>f.startsWith(k.name+".part")).sort();
+              if(!parts.length)throw new Error("missing parts for "+k.name);
+              const out=fs.openSync(k.name,"w");
+              for(const f of parts)fs.writeSync(out,fs.readFileSync(f));
+              fs.closeSync(out);
+              const data=fs.readFileSync(k.name);
+              const sha=crypto.createHash("sha256").update(data).digest("hex");
+              if(sha!==k.sha256||data.length!==k.size)throw new Error("pack does not match payload: "+k.name);
+              console.log("ok",k.name,data.length);
+            }'
+
+      - name: Sign the manifest
+        env:
+          SIGNING_KEY: ${{ secrets.DNT_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGNING_KEY}" ]; then echo "::error::Repository secret DNT_SIGNING_KEY is not set."; exit 1; fi
+          umask 077
+          key="$RUNNER_TEMP/signing.pem"
+          printf '%s\n' "$SIGNING_KEY" > "$key"
+          DNT_SIGNING_KEY="$key" node tools/sign-update.mjs staging
+          rm -f "$key"
+
+      - name: Upload to the godot-channel prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          cd staging
+          version=$(node -p 'JSON.parse(require("fs").readFileSync("payload.json","utf8")).version')
+          if ! gh release view godot-channel >/dev/null 2>&1; then
+            gh release create godot-channel --target main --prerelease --latest=false \
+              --title "Godot 판 업데이트 채널" \
+              --notes "Godot 판(0.50 이상) 게임 안 업데이트 채널입니다. 게임은 godot-latest.json의 서명과 꾸러미 해시를 확인한 뒤에만 적용합니다. 웹·데스크톱판(content-latest.json)과는 별개입니다."
+          fi
+          packs=$(node -p 'JSON.parse(require("fs").readFileSync("payload.json","utf8")).packs.map(p=>p.name).join(" ")')
+          # packs first, the manifest last, so the manifest never points at a pack that is not there yet
+          gh release upload godot-channel $packs --clobber
+          gh release upload godot-channel godot-latest.json --clobber
+          gh release edit godot-channel --prerelease --latest=false --title "Godot 판 업데이트 채널 · v$version"
+          echo "Published v$version"
+
+      - name: Remove the staging branch
+        if: success()
+        run: git push origin --delete "${GITHUB_REF_NAME}"
