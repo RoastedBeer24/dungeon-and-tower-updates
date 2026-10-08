@@ -6,7 +6,7 @@
 // Needs only Node.js (no packages).
 import fs from 'node:fs';import path from 'node:path';import {createPrivateKey,createPublicKey,sign,verify} from 'node:crypto';import {fileURLToPath} from 'node:url';
 const PUBLIC_KEY='-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEADvF0BJUIxae0zNDNgzzdfToFhVgyCkH878cxIdbSkmY=\n-----END PUBLIC KEY-----\n';
-const fail=m=>{console.error('서명 실패: '+m);process.exit(1)};
+const fail=m=>{console.error('서명 실패: '+m);if(process.env.GITHUB_ACTIONS)console.log('::error::'+m.replace(/\n/g,' '));process.exit(1)};
 const dir=path.resolve(process.argv[2]??path.dirname(fileURLToPath(import.meta.url)));
 const payloadPath=path.join(dir,'payload.json');
 if(!fs.existsSync(payloadPath))fail('payload.json이 없습니다: '+payloadPath);
@@ -17,8 +17,11 @@ for(const f of p.files)if(!['DungeonAndTower.pck','DungeonAndTower.exe'].include
 for(const k of p.packs)if(k.name!==k.sha256+'.pack'||!/^[0-9a-f]{64}$/.test(k.sha256))fail('꾸러미 이름이 올바르지 않습니다.');
 const keyPath=process.env.DNT_SIGNING_KEY;
 if(!keyPath||!fs.existsSync(keyPath))fail('DNT_SIGNING_KEY에 서명 키 파일의 로컬 경로를 지정하세요.');
-let key;try{key=createPrivateKey(fs.readFileSync(keyPath))}catch{fail('서명 키를 읽을 수 없습니다.')}
-if(createPublicKey(key).export({type:'spki',format:'pem'}).trim()!==PUBLIC_KEY.trim())fail('이 키는 게임에 들어 있는 공개 키와 맞지 않습니다. 기존 키를 쓰세요.');
+const raw=fs.readFileSync(keyPath,'utf8');
+let key;try{key=createPrivateKey(raw)}catch(e){fail('서명 키를 읽을 수 없습니다 (PEM 머리글 '+(raw.includes('-----BEGIN PRIVATE KEY-----')?'있음':'없음')+', 길이 '+raw.trim().length+'자): '+e.message)}
+if(key.asymmetricKeyType!=='ed25519')fail('Ed25519 키가 아닙니다: '+key.asymmetricKeyType);
+const got=createPublicKey(key).export({type:'spki',format:'pem'}).trim();
+if(got!==PUBLIC_KEY.trim())fail('이 키는 게임에 들어 있는 공개 키와 맞지 않습니다. 이 키의 공개 키: '+got.split('\n')[1]+' / 게임: '+PUBLIC_KEY.trim().split('\n')[1]);
 const signature=sign(null,Buffer.from(payload),key);
 if(!verify(null,Buffer.from(payload),PUBLIC_KEY,signature))fail('서명 자체 확인에 실패했습니다.');
 fs.writeFileSync(path.join(dir,'godot-latest.json'),JSON.stringify({payload,signature:signature.toString('base64')}));
