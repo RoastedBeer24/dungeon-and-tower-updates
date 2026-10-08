@@ -5,7 +5,7 @@
 // written anywhere, and the script refuses to sign if the key is not the one built into the game.
 // Needs only Node.js (no packages).
 import fs from 'node:fs';import path from 'node:path';import {createPrivateKey,createPublicKey,sign,verify} from 'node:crypto';import {fileURLToPath} from 'node:url';
-const PUBLIC_KEY='-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEAAUH2jsYtLeKx4UAF/YupeuxTGGs4pVAtRoydftksxx8=\n-----END PUBLIC KEY-----\n';
+const PUBLIC_KEY='-----BEGIN PUBLIC KEY-----\nMCowBQYDK2VwAyEADvF0BJUIxae0zNDNgzzdfToFhVgyCkH878cxIdbSkmY=\n-----END PUBLIC KEY-----\n';
 const fail=m=>{console.error('서명 실패: '+m);process.exit(1)};
 const dir=path.resolve(process.argv[2]??path.dirname(fileURLToPath(import.meta.url)));
 const payloadPath=path.join(dir,'payload.json');
