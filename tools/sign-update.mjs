@@ -18,7 +18,8 @@ for(const k of p.packs)if(k.name!==k.sha256+'.pack'||!/^[0-9a-f]{64}$/.test(k.sh
 const keyPath=process.env.DNT_SIGNING_KEY;
 if(!keyPath||!fs.existsSync(keyPath))fail('DNT_SIGNING_KEY에 서명 키 파일의 로컬 경로를 지정하세요.');
 const raw=fs.readFileSync(keyPath,'utf8');
-let key;try{key=createPrivateKey(raw)}catch(e){fail('서명 키를 읽을 수 없습니다 (PEM 머리글 '+(raw.includes('-----BEGIN PRIVATE KEY-----')?'있음':'없음')+', 길이 '+raw.trim().length+'자): '+e.message)}
+if(raw.includes('BEGIN PUBLIC KEY'))fail('비밀값에 공개 키(PUBLIC KEY)가 들어 있습니다. signing-private.pem(-----BEGIN PRIVATE KEY-----로 시작) 내용을 넣어야 합니다.');
+let key;try{key=createPrivateKey(raw)}catch(e){fail('서명 키를 읽을 수 없습니다 (첫 줄: '+(raw.trim().split(/\r?\n/)[0].startsWith('-----')?raw.trim().split(/\r?\n/)[0]:'PEM 머리글 없음')+', 길이 '+raw.trim().length+'자): '+e.message)}
 if(key.asymmetricKeyType!=='ed25519')fail('Ed25519 키가 아닙니다: '+key.asymmetricKeyType);
 const got=createPublicKey(key).export({type:'spki',format:'pem'}).trim();
 if(got!==PUBLIC_KEY.trim())fail('이 키는 게임에 들어 있는 공개 키와 맞지 않습니다. 이 키의 공개 키: '+got.split('\n')[1]+' / 게임: '+PUBLIC_KEY.trim().split('\n')[1]);
