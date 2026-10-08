@@ -2,8 +2,10 @@
 #
 # A build arrives as a branch named godot-staging/<version> holding staging/payload.json (unsigned manifest
 # payload from tools/godot/package-update.mjs --unsigned) and the update pack split into staging/*.part* files.
-# This job joins and checks the pack, signs the payload with the release key from the DNT_SIGNING_KEY secret,
-# uploads the pack and then godot-latest.json, and deletes the staging branch.
+# This job joins and checks the pack, adds small delta packs from the earlier builds still on the release
+# (tools/add-deltas.mjs: players on those builds download only what changed), signs the payload with the release key
+# from the DNT_SIGNING_KEY secret, uploads the packs and then godot-latest.json, removes packs no manifest needs any
+# more, and deletes the staging branch.
 #
 # The key only exists as a repository secret: it is written to a temporary file readable by the runner user,
 # used once by tools/sign-update.mjs (which refuses keys that do not match the key built into the game) and removed.
@@ -51,6 +53,28 @@ jobs:
               console.log("ok",k.name,data.length);
             }'
 
+      - name: Add deltas from earlier builds
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          prev="$RUNNER_TEMP/prev"; bases="$RUNNER_TEMP/bases"
+          mkdir -p "$prev" "$bases"
+          if gh release download godot-channel -p godot-latest.json -D "$prev" 2>/dev/null; then
+            names=$(node -e '
+              const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")),p=JSON.parse(s.payload);
+              const f=p.files.find(x=>x.path==="DungeonAndTower.pck");
+              const n=[f&&p.packs[f.pack].name,...(p.bases||[]).map(b=>b.pack)].filter(x=>/^[0-9a-f]{64}\.pack$/.test(x||""));
+              console.log([...new Set(n)].slice(0,4).join(" "))' "$prev/godot-latest.json")
+            for n in $names; do
+              gh release download godot-channel -p "$n" -D "$bases" || echo "::warning::earlier pack $n could not be downloaded"
+            done
+          else
+            echo "No earlier manifest: publishing the full pack only."
+          fi
+          node tools/add-deltas.mjs staging "$prev/godot-latest.json" "$bases"
+          rm -rf "$bases"
+
       - name: Sign the manifest
         env:
           SIGNING_KEY: ${{ secrets.DNT_SIGNING_KEY }}
@@ -81,6 +105,18 @@ jobs:
           gh release upload godot-channel godot-latest.json --clobber
           gh release edit godot-channel --prerelease --latest=false --title "Godot 판 업데이트 채널 · v$version"
           echo "Published v$version"
+
+      - name: Remove packs no manifest needs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -uo pipefail
+          keep=$(node -p 'const p=JSON.parse(require("fs").readFileSync("staging/payload.json","utf8"));[...p.packs.map(x=>x.name),...(p.bases||[]).map(b=>b.pack)].join("\n")')
+          for n in $(gh release view godot-channel --json assets -q '.assets[].name' | grep -E '^[0-9a-f]{64}\.pack$'); do
+            if ! printf '%s\n' "$keep" | grep -qx "$n"; then
+              gh release delete-asset godot-channel "$n" -y && echo "removed $n" || echo "::warning::could not remove $n"
+            fi
+          done
 
       - name: Remove the staging branch
         if: success()

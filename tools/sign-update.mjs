@@ -15,6 +15,9 @@ let p;try{p=JSON.parse(payload)}catch{fail('payload.json을 읽을 수 없습니
 if(p.channel!=='godot'||!/^\d+\.\d+\.\d+$/.test(p.version)||!Array.isArray(p.files)||!Array.isArray(p.packs))fail('payload.json 형식이 올바르지 않습니다.');
 for(const f of p.files)if(!['DungeonAndTower.pck','DungeonAndTower.exe'].includes(f.path)||!/^[0-9a-f]{64}$/.test(f.sha256))fail('허용되지 않은 파일: '+f.path);
 for(const k of p.packs)if(k.name!==k.sha256+'.pack'||!/^[0-9a-f]{64}$/.test(k.sha256))fail('꾸러미 이름이 올바르지 않습니다.');
+for(const d of p.deltas??[])if(!p.files.some(f=>f.path===d.path)||!/^[0-9a-f]{64}$/.test(d.from)||!Number.isInteger(d.pack)||!p.packs[d.pack])fail('차분 정보가 올바르지 않습니다.');
+if(p.deltas!==undefined&&(!Array.isArray(p.deltas)||p.deltas.length>16))fail('차분 정보가 올바르지 않습니다.');
+for(const b of p.bases??[])if(!/^[0-9a-f]{64}$/.test(b.sha256)||!/^[0-9a-f]{64}\.pack$/.test(b.pack))fail('기준 꾸러미 정보가 올바르지 않습니다.');
 const keyPath=process.env.DNT_SIGNING_KEY;
 if(!keyPath||!fs.existsSync(keyPath))fail('DNT_SIGNING_KEY에 서명 키 파일의 로컬 경로를 지정하세요.');
 const raw=fs.readFileSync(keyPath,'utf8');
@@ -26,4 +29,4 @@ if(got!==PUBLIC_KEY.trim())fail('이 키는 게임에 들어 있는 공개 키�
 const signature=sign(null,Buffer.from(payload),key);
 if(!verify(null,Buffer.from(payload),PUBLIC_KEY,signature))fail('서명 자체 확인에 실패했습니다.');
 fs.writeFileSync(path.join(dir,'godot-latest.json'),JSON.stringify({payload,signature:signature.toString('base64')}));
-console.log(`서명 완료: v${p.version} · 파일 ${p.files.length}개 · 꾸러미 ${p.packs.length}개 → godot-latest.json`);
+console.log(`서명 완료: v${p.version} · 파일 ${p.files.length}개 · 꾸러미 ${p.packs.length}개 (차분 ${p.deltas?.length??0}개) → godot-latest.json`);
